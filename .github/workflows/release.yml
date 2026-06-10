@@ -60,6 +60,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
+          # For workflow_dispatch, checkout the tag the user typed in;
+          # for push of a tag, checkout that tag directly.
+          ref: ${{ inputs.tag || github.ref }}
           submodules: recursive
           fetch-depth: 0
           fetch-tags: true
@@ -315,6 +318,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Determine tag
         id: tag
