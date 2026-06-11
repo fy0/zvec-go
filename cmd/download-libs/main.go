@@ -5,7 +5,8 @@
 //
 //	go run ./cmd/download-libs [-version v0.5.0] [-dest ./lib]
 //
-// If -version is not specified, it reads from the VERSION file in the module root.
+// If -version is not specified, it queries the GitHub Releases API to fetch the
+// latest published release tag.
 // If -dest is not specified, it defaults to ./lib relative to the module root.
 package main
 
@@ -13,6 +14,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -21,11 +23,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
 	upstreamRepo = "zvec-ai/zvec-go"
 	baseURL      = "https://github.com/" + upstreamRepo + "/releases/download"
+	latestAPIURL = "https://api.github.com/repos/" + upstreamRepo + "/releases/latest"
 )
 
 // platformArtifact maps GOOS/GOARCH to the artifact name and whether it's a zip.
@@ -45,7 +49,7 @@ func main() {
 	var version string
 	var dest string
 
-	flag.StringVar(&version, "version", "", "Library version to download (e.g. v0.5.0). Defaults to VERSION file.")
+	flag.StringVar(&version, "version", "", "Library version to download (e.g. v0.5.0). Defaults to the latest GitHub release.")
 	flag.StringVar(&dest, "dest", "", "Destination directory for lib/. Defaults to ./lib relative to module root.")
 	flag.Parse()
 
@@ -55,12 +59,16 @@ func main() {
 		fatalf("Cannot find module root: %v", err)
 	}
 
-	// Resolve version
+	// Resolve version: when -version is not specified, query GitHub Releases API
+	// for the latest published tag. This avoids the need for an in-tree VERSION file
+	// that has to be bumped on every release.
 	if version == "" {
-		version, err = readVersionFile(filepath.Join(moduleRoot, "VERSION"))
+		fmt.Println("No -version flag provided; querying latest release from GitHub...")
+		version, err = fetchLatestReleaseTag()
 		if err != nil {
-			fatalf("No -version flag and cannot read VERSION file: %v\nUsage: go run ./cmd/download-libs -version v0.5.0", err)
+			fatalf("Cannot determine latest release: %v\nUsage: go run ./cmd/download-libs -version v0.5.0", err)
 		}
+		fmt.Printf("  Latest release: %s\n", version)
 	}
 	version = strings.TrimSpace(version)
 	if !strings.HasPrefix(version, "v") {
@@ -132,13 +140,42 @@ func findModuleRoot() (string, error) {
 	return "", fmt.Errorf("go.mod not found")
 }
 
-// readVersionFile reads and trims the VERSION file.
-func readVersionFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+// fetchLatestReleaseTag queries the GitHub Releases API and returns the
+// tag name of the latest published release (e.g. "v0.5.0").
+func fetchLatestReleaseTag() (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, latestAPIURL, nil)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(data)), nil
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	// Honor GITHUB_TOKEN if available to lift the unauthenticated rate limit.
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, latestAPIURL, strings.TrimSpace(string(body)))
+	}
+
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if payload.TagName == "" {
+		return "", fmt.Errorf("empty tag_name in response from %s", latestAPIURL)
+	}
+	return payload.TagName, nil
 }
 
 // download fetches a URL and writes to dst.
