@@ -1,0 +1,46 @@
+diff --git a/src/binding/c/CMakeLists.txt b/src/binding/c/CMakeLists.txt
+index 7c86121..8a2c3e1 100644
+--- a/src/binding/c/CMakeLists.txt
++++ b/src/binding/c/CMakeLists.txt
+@@ -66,10 +66,18 @@ set(ZVEC_C_API_HEADERS
+ )
+ 
+ # =============================================================================
+-# Build FAT Shared Library (zvec_c_api.so)
++# Build FAT C API Library (zvec_c_api)
+ # =============================================================================
+-add_library(zvec_c_api SHARED
+-    ${ZVEC_C_API_SOURCES}
++
++option(ZVEC_C_API_STATIC "Build zvec C API as a static library" OFF)
++if(ZVEC_C_API_STATIC)
++    set(ZVEC_C_API_LIBRARY_TYPE STATIC)
++else()
++    set(ZVEC_C_API_LIBRARY_TYPE SHARED)
++endif()
++
++add_library(zvec_c_api ${ZVEC_C_API_LIBRARY_TYPE}
++    ${ZVEC_C_API_SOURCES}
+     ${ZVEC_C_API_HEADERS}
+ )
+ 
+@@ -85,8 +93,8 @@ set_target_properties(zvec_c_api PROPERTIES
+     VISIBILITY_INLINES_HIDDEN ON
+ )
+ 
+-# On Windows, define ZVEC_BUILD_SHARED so that c_api.h uses __declspec(dllexport)
+-if(MSVC OR WIN32)
++# On Windows shared builds, define ZVEC_BUILD_SHARED so c_api.h exports symbols.
++if((MSVC OR WIN32) AND NOT ZVEC_C_API_STATIC)
+     target_compile_definitions(zvec_c_api PRIVATE ZVEC_BUILD_SHARED)
+ endif()
+ 
+@@ -224,7 +232,7 @@ target_compile_options(zvec_c_api PRIVATE
+ )
+ 
+ # Strip symbols in release builds to reduce library size
+-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
++if(NOT ZVEC_C_API_STATIC AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+     if(UNIX AND NOT APPLE)
+         # Linux: Use strip command to remove symbols
+         add_custom_command(TARGET zvec_c_api POST_BUILD

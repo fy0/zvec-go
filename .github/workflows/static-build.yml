@@ -1,0 +1,93 @@
+name: Static Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/static-build.yml"
+      - "cmd/static-smoke/**"
+      - "cgo_source*.go"
+      - "scripts/apply-zvec-static-patch.sh"
+      - "scripts/build-static-smoke.sh"
+      - "scripts/patches/**"
+      - "go.mod"
+      - ".gitmodules"
+      - "zvec"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/static-build.yml"
+      - "cmd/static-smoke/**"
+      - "cgo_source*.go"
+      - "scripts/apply-zvec-static-patch.sh"
+      - "scripts/build-static-smoke.sh"
+      - "scripts/patches/**"
+      - "go.mod"
+      - ".gitmodules"
+      - "zvec"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-amd64:
+    name: Linux amd64 static smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache-dependency-path: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git pkg-config
+          python -m pip install --upgrade pip cmake==3.30.0 ninja==1.11.1
+          echo "$(python -c 'import site; print(site.USER_BASE)')/bin" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Build static smoke binary
+        run: bash scripts/build-static-smoke.sh
+        shell: bash
+
+      - name: Write size summary
+        if: always()
+        run: |
+          if [ -f dist/static/size-report.txt ]; then
+            {
+              echo "## Static build size report"
+              echo
+              echo '```text'
+              cat dist/static/size-report.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        shell: bash
+
+      - name: Upload static build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zvec-go-static-linux-amd64
+          path: dist/static/
+          if-no-files-found: warn

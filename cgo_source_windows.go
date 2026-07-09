@@ -1,4 +1,4 @@
-//go:build source && windows
+//go:build source && !source_static && windows
 
 package zvec
 
