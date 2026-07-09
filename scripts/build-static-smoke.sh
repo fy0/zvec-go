@@ -74,7 +74,8 @@ for archive in "${all_archives[@]}"; do
 done
 
 export CGO_ENABLED=1
-export CGO_LDFLAGS="-Wl,--whole-archive ${internal_archives[*]} -Wl,--no-whole-archive -Wl,--start-group ${other_archives[*]} -Wl,--end-group -lstdc++ -lm -ldl -lpthread -lrt"
+link_archives=("${internal_archives[@]}" "${other_archives[@]}")
+export CGO_LDFLAGS="-Wl,--start-group ${link_archives[*]} -Wl,--end-group -lstdc++ -lm -ldl -lpthread -lrt"
 
 go build \
   -tags "source source_static" \
