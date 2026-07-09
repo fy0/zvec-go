@@ -15,7 +15,7 @@ fi
 
 cd "$REPO_ROOT"
 git submodule update --init --recursive
-"$REPO_ROOT/scripts/apply-zvec-static-patch.sh"
+bash "$REPO_ROOT/scripts/apply-zvec-static-patch.sh"
 
 if git -C "$ZVEC_DIR" rev-parse --is-shallow-repository >/dev/null 2>&1; then
   git -C "$ZVEC_DIR" fetch --tags --unshallow 2>/dev/null || git -C "$ZVEC_DIR" fetch --tags
