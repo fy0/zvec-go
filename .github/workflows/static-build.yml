@@ -7,6 +7,8 @@ on:
     paths:
       - ".github/workflows/static-build.yml"
       - "cmd/static-smoke/**"
+      - "cmd/download-libs/**"
+      - "cgo_vendor*.go"
       - "cgo_source*.go"
       - "scripts/apply-zvec-static-patch.sh"
       - "scripts/build-static-smoke.sh"
@@ -19,6 +21,8 @@ on:
     paths:
       - ".github/workflows/static-build.yml"
       - "cmd/static-smoke/**"
+      - "cmd/download-libs/**"
+      - "cgo_vendor*.go"
       - "cgo_source*.go"
       - "scripts/apply-zvec-static-patch.sh"
       - "scripts/build-static-smoke.sh"

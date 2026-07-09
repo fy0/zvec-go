@@ -1,4 +1,4 @@
-//go:build !source && windows && amd64
+//go:build !source && !vendor_static && windows && amd64
 
 package zvec
 

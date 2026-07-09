@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	go run ./cmd/download-libs [-version v0.5.1] [-dest ./lib]
+//	go run ./cmd/download-libs [-version v0.5.1] [-dest ./lib] [-static]
 //
 // If -version is not specified, it queries the GitHub Releases API to fetch the
 // latest published release tag.
@@ -38,19 +38,25 @@ type platformArtifact struct {
 	isZip bool
 }
 
-var platformMap = map[string]platformArtifact{
+var dynamicPlatformMap = map[string]platformArtifact{
 	"darwin/arm64":  {name: "zvec-libs-darwin-arm64.tar.gz", isZip: false},
 	"linux/amd64":   {name: "zvec-libs-linux-x64.tar.gz", isZip: false},
 	"linux/arm64":   {name: "zvec-libs-linux-arm64.tar.gz", isZip: false},
 	"windows/amd64": {name: "zvec-libs-windows-x64.zip", isZip: true},
 }
 
+var staticPlatformMap = map[string]platformArtifact{
+	"linux/amd64": {name: "zvec-libs-linux-x64-static.tar.gz", isZip: false},
+}
+
 func main() {
 	var version string
 	var dest string
+	var staticLink bool
 
 	flag.StringVar(&version, "version", "", "Library version to download (e.g. v0.5.1). Defaults to the latest GitHub release.")
 	flag.StringVar(&dest, "dest", "", "Destination directory for lib/. Defaults to ./lib relative to module root.")
+	flag.BoolVar(&staticLink, "static", false, "Download static vendor libraries. Currently supported on linux/amd64.")
 	flag.Parse()
 
 	// Locate module root (directory containing this go.mod)
@@ -82,14 +88,24 @@ func main() {
 
 	// Detect platform
 	key := runtime.GOOS + "/" + runtime.GOARCH
+	platformMap := dynamicPlatformMap
+	supportedPlatforms := "darwin/arm64, linux/amd64, linux/arm64, windows/amd64"
+	if staticLink {
+		platformMap = staticPlatformMap
+		supportedPlatforms = "linux/amd64"
+	}
 	artifact, ok := platformMap[key]
 	if !ok {
-		fatalf("Unsupported platform: %s\nSupported platforms: darwin/arm64, linux/amd64, linux/arm64, windows/amd64", key)
+		fatalf("Unsupported platform: %s\nSupported platforms: %s", key, supportedPlatforms)
 	}
 
 	downloadURL := fmt.Sprintf("%s/%s/%s", baseURL, version, artifact.name)
 
-	fmt.Printf("Downloading pre-built libraries for %s (%s)...\n", key, version)
+	if staticLink {
+		fmt.Printf("Downloading static vendor libraries for %s (%s)...\n", key, version)
+	} else {
+		fmt.Printf("Downloading pre-built libraries for %s (%s)...\n", key, version)
+	}
 	fmt.Printf("  URL: %s\n", downloadURL)
 	fmt.Printf("  Destination: %s\n", dest)
 
@@ -118,7 +134,11 @@ func main() {
 	}
 
 	fmt.Println("Done! Pre-built libraries installed to:", dest)
-	fmt.Println("You can now build with: CGO_ENABLED=1 go build .")
+	if staticLink {
+		fmt.Println("You can now build with: CGO_ENABLED=1 go build -tags vendor_static -ldflags=\"-linkmode external -extldflags '-static -static-libstdc++ -static-libgcc'\" .")
+	} else {
+		fmt.Println("You can now build with: CGO_ENABLED=1 go build .")
+	}
 }
 
 // findModuleRoot walks up from the current directory to find go.mod.

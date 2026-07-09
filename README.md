@@ -47,7 +47,7 @@ go test -tags integration -count=1 -v ./...
 
 ## Installation
 
-zvec-go provides **two build modes** to suit different users:
+zvec-go provides **three build modes** to suit different users:
 
 ### Mode 1: Vendor Mode (Default — Pre-built Libraries)
 
@@ -91,7 +91,27 @@ CGO_ENABLED=1 go build .
 
 Supported platforms: **Linux (x64, ARM64)**, **macOS (ARM64)**, **Windows (x64)**.
 
-### Mode 2: Source Mode (Build from Source)
+### Mode 2: Static Vendor Mode (Opt-in — Pre-built Static Libraries)
+
+Static vendor mode links zvec into your Go executable from pre-built static
+archives. The default vendor mode remains dynamically linked.
+
+Currently supported platform: **Linux (x64)**.
+
+```bash
+# Download static vendor libraries
+go run ./cmd/download-libs -version v0.5.1 -static
+
+# Build with the opt-in static vendor tag
+CGO_ENABLED=1 go build -tags vendor_static \
+  -ldflags="-linkmode external -extldflags '-static -static-libstdc++ -static-libgcc'" .
+```
+
+The static archive is extracted to `lib/linux_amd64_static/`. The build tag
+`vendor_static` selects this static vendor mode and excludes the default dynamic
+vendor linker flags.
+
+### Mode 3: Source Mode (Build from Source)
 
 For developers who want to use a custom zvec version, contribute to the project, or build for unsupported platforms:
 
@@ -120,6 +140,7 @@ go test -tags "source integration" -v ./...
 | Scenario | Mode | Build Tag |
 |----------|------|-----------|
 | Just want to use zvec-go in my project | **Vendor** (default) | _(none)_ |
+| Want a Linux x64 static-linked executable from pre-built archives | **Static Vendor** | `vendor_static` |
 | Contributing to zvec-go development | **Source** | `-tags source` |
 | Need a custom/latest zvec version | **Source** | `-tags source` |
 | Building for an unsupported platform | **Source** | `-tags source` |

@@ -35,8 +35,9 @@
 package zvec
 
 // cgo CFLAGS and LDFLAGS are defined in platform-specific files:
-//   - cgo_vendor_*.go  (default: pre-built libraries in lib/)
-//   - cgo_source.go    (build tag "source": libraries from zvec submodule)
+//   - cgo_vendor_*.go        (default: pre-built shared libraries in lib/)
+//   - cgo_vendor_static_*.go (build tag "vendor_static": pre-built static libraries in lib/)
+//   - cgo_source.go          (build tag "source": libraries from zvec submodule)
 
 /*
 #include "zvec/c_api.h"

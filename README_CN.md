@@ -47,7 +47,7 @@ go test -tags integration -count=1 -v ./...
 
 ## 安装
 
-zvec-go 提供**两种构建模式**，适合不同的用户场景：
+zvec-go 提供**三种构建模式**，适合不同的用户场景：
 
 ### 模式 1：Vendor 模式（默认 — 预编译库）
 
@@ -91,7 +91,26 @@ CGO_ENABLED=1 go build .
 
 支持平台：**Linux (x64, ARM64)**、**macOS (ARM64)** 和 **Windows (x64)**。
 
-### 模式 2：Source 模式（从源码构建）
+### 模式 2：静态 Vendor 模式（可选 — 预编译静态库）
+
+静态 Vendor 模式会从预编译静态库把 zvec 链接进 Go 可执行文件。默认 Vendor
+模式仍然是动态链接，不受影响。
+
+当前支持平台：**Linux (x64)**。
+
+```bash
+# 下载静态 Vendor 库
+go run ./cmd/download-libs -version v0.5.1 -static
+
+# 使用可选的静态 Vendor 标签构建
+CGO_ENABLED=1 go build -tags vendor_static \
+  -ldflags="-linkmode external -extldflags '-static -static-libstdc++ -static-libgcc'" .
+```
+
+静态库会解压到 `lib/linux_amd64_static/`。构建标签 `vendor_static` 会选择静态
+Vendor 模式，并排除默认动态 Vendor 的链接参数。
+
+### 模式 3：Source 模式（从源码构建）
 
 适合需要使用自定义 zvec 版本、参与项目开发或为不支持的平台构建的用户：
 
@@ -120,6 +139,7 @@ go test -tags "source integration" -v ./...
 | 场景 | 模式 | 构建标签 |
 |------|------|----------|
 | 只想在项目中使用 zvec-go | **Vendor**（默认） | _（无需指定）_ |
+| 希望基于预编译库构建 Linux x64 静态链接可执行文件 | **静态 Vendor** | `vendor_static` |
 | 参与 zvec-go 开发 | **Source** | `-tags source` |
 | 需要自定义/最新版 zvec | **Source** | `-tags source` |
 | 为不支持的平台构建 | **Source** | `-tags source` |

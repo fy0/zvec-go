@@ -315,11 +315,59 @@ jobs:
             ${{ matrix.artifact_name }}.zip.sha256
 
   # ===========================================================================
+  # Build static vendor archive for Linux x64
+  # ===========================================================================
+  build-static-libs:
+    name: Build static vendor (linux-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          submodules: recursive
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git pkg-config
+          python -m pip install --upgrade pip cmake==3.30.0 ninja==1.11.1
+          echo "$(python -c 'import site; print(site.USER_BASE)')/bin" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Build static vendor archive
+        run: bash scripts/build-static-smoke.sh
+        shell: bash
+
+      - name: Upload static vendor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zvec-libs-linux-x64-static
+          path: |
+            dist/static/zvec-libs-linux-x64-static.tar.gz
+            dist/static/zvec-libs-linux-x64-static.tar.gz.sha256
+
+  # ===========================================================================
   # Create GitHub Release with all platform libraries
   # ===========================================================================
   release:
     name: Create Release
-    needs: build-libs
+    needs: [build-libs, build-static-libs]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -364,6 +412,7 @@ jobs:
           | **Linux** | `zvec-libs-linux-x64.tar.gz` | x86_64 |
           | **Linux** | `zvec-libs-linux-arm64.tar.gz` | ARM64 (aarch64) |
           | **Windows** | `zvec-libs-windows-x64.zip` | x86_64 |
+          | **Linux static** | `zvec-libs-linux-x64-static.tar.gz` | x86_64 |
 
           ### Quick Start
 
@@ -384,6 +433,14 @@ jobs:
 
           # 4. Build (you can now build your project)
           CGO_ENABLED=1 go build .
+          ```
+
+          Static vendor mode is available for Linux x86_64:
+
+          ```bash
+          go run ./cmd/download-libs -version v0.5.1 -static
+          CGO_ENABLED=1 go build -tags vendor_static \
+            -ldflags="-linkmode external -extldflags '-static -static-libstdc++ -static-libgcc'" .
           ```
 
           ### Checksums

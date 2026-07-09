@@ -1,4 +1,4 @@
-//go:build !source && darwin && arm64
+//go:build !source && !vendor_static && darwin && arm64
 
 package zvec
 
