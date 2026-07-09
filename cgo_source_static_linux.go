@@ -1,4 +1,4 @@
-//go:build source && source_static && linux
+//go:build source && source_static && linux && !purego
 
 package zvec
 

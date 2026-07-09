@@ -1,4 +1,4 @@
-//go:build source && !source_static && !windows
+//go:build source && !source_static && !windows && !purego
 
 package zvec
 
