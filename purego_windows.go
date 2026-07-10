@@ -1,4 +1,4 @@
-//go:build purego && windows
+//go:build (purego || !cgo) && windows
 
 package zvec
 

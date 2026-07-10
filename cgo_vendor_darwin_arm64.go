@@ -1,4 +1,4 @@
-//go:build !source && darwin && arm64 && !purego
+//go:build cgo && !source && darwin && arm64 && !purego
 
 package zvec
 

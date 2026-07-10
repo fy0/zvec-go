@@ -1,4 +1,4 @@
-//go:build !purego
+//go:build cgo && !purego
 
 package zvec
 
@@ -34,6 +34,7 @@ func (q *MultiQuery) Destroy() {
 // AddSubQuery adds a sub-query to the multi-query.
 // The sub-query is copied; the caller retains ownership.
 func (q *MultiQuery) AddSubQuery(sub *SubQuery) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_add_sub_query(q.handle, sub.handle))
 }
 
@@ -44,6 +45,7 @@ func (q *MultiQuery) GetSubQueryCount() int {
 
 // SetTopK sets the top-k parameter for the multi-query.
 func (q *MultiQuery) SetTopK(topk int) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_topk(q.handle, C.int(topk)))
 }
 
@@ -56,6 +58,7 @@ func (q *MultiQuery) GetTopK() int {
 func (q *MultiQuery) SetFilter(filter string) error {
 	cFilter := C.CString(filter)
 	defer C.free(unsafe.Pointer(cFilter))
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_filter(q.handle, cFilter))
 }
 
@@ -66,6 +69,7 @@ func (q *MultiQuery) GetFilter() string {
 
 // SetIncludeVector sets whether to include vector data in results.
 func (q *MultiQuery) SetIncludeVector(include bool) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_include_vector(q.handle, C.bool(include)))
 }
 
@@ -88,6 +92,7 @@ func (q *MultiQuery) SetOutputFields(fields []string) error {
 			C.free(unsafe.Pointer(cf))
 		}
 	}()
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_output_fields(
 		q.handle,
 		(**C.char)(unsafe.Pointer(&cFields[0])),
@@ -97,6 +102,7 @@ func (q *MultiQuery) SetOutputFields(fields []string) error {
 
 // SetRerankRRF sets the RRF (Reciprocal Rank Fusion) rerank strategy.
 func (q *MultiQuery) SetRerankRRF(rankConstant int) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_rerank_rrf(q.handle, C.int(rankConstant)))
 }
 
@@ -105,6 +111,7 @@ func (q *MultiQuery) SetRerankWeighted(weights []float64) error {
 	if len(weights) == 0 {
 		return &Error{Code: InvalidArgument, Message: "weights cannot be empty"}
 	}
+	defer lockErrorThread()()
 	return toError(C.zvec_multi_query_set_rerank_weighted(
 		q.handle,
 		(*C.double)(unsafe.Pointer(&weights[0])),
@@ -136,6 +143,7 @@ func (q *SubQuery) Destroy() {
 
 // SetNumCandidates sets the number of candidates to retrieve per field.
 func (q *SubQuery) SetNumCandidates(n int) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_sub_query_set_num_candidates(q.handle, C.int(n)))
 }
 
@@ -148,6 +156,7 @@ func (q *SubQuery) GetNumCandidates() int {
 func (q *SubQuery) SetFieldName(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
+	defer lockErrorThread()()
 	return toError(C.zvec_sub_query_set_field_name(q.handle, cName))
 }
 
@@ -161,6 +170,7 @@ func (q *SubQuery) SetQueryVector(data []float32) error {
 	if len(data) == 0 {
 		return &Error{Code: InvalidArgument, Message: "query vector cannot be empty"}
 	}
+	defer lockErrorThread()()
 	return toError(C.zvec_sub_query_set_query_vector(
 		q.handle,
 		unsafe.Pointer(&data[0]),
@@ -176,6 +186,7 @@ func (q *SubQuery) SetSparseVector(indices []uint32, values []float32) error {
 	if len(indices) == 0 {
 		return &Error{Code: InvalidArgument, Message: "sparse vector cannot be empty"}
 	}
+	defer lockErrorThread()()
 	return toError(C.zvec_sub_query_set_sparse_vector(
 		q.handle,
 		(*C.uint32_t)(unsafe.Pointer(&indices[0])),
@@ -187,6 +198,7 @@ func (q *SubQuery) SetSparseVector(indices []uint32, values []float32) error {
 // SetHNSWParams sets the HNSW query parameters.
 // Ownership of params is transferred to the sub-query on success.
 func (q *SubQuery) SetHNSWParams(params *HNSWQueryParams) error {
+	defer lockErrorThread()()
 	err := toError(C.zvec_sub_query_set_hnsw_params(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -197,6 +209,7 @@ func (q *SubQuery) SetHNSWParams(params *HNSWQueryParams) error {
 // SetIVFParams sets the IVF query parameters.
 // Ownership of params is transferred to the sub-query on success.
 func (q *SubQuery) SetIVFParams(params *IVFQueryParams) error {
+	defer lockErrorThread()()
 	err := toError(C.zvec_sub_query_set_ivf_params(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -207,6 +220,7 @@ func (q *SubQuery) SetIVFParams(params *IVFQueryParams) error {
 // SetFlatParams sets the Flat query parameters.
 // Ownership of params is transferred to the sub-query on success.
 func (q *SubQuery) SetFlatParams(params *FlatQueryParams) error {
+	defer lockErrorThread()()
 	err := toError(C.zvec_sub_query_set_flat_params(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -221,6 +235,7 @@ func (q *SubQuery) SetFlatParams(params *FlatQueryParams) error {
 // combinations like FTS + Vector rerank via RRF/Weighted.
 // Ownership of params is transferred to the sub-query on success.
 func (q *SubQuery) SetFTSParams(params *FTSQueryParams) error {
+	defer lockErrorThread()()
 	err := toError(C.zvec_sub_query_set_fts_params(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -233,5 +248,6 @@ func (q *SubQuery) SetFTSParams(params *FTSQueryParams) error {
 //
 // Available since zvec v0.5.1 (c_api: zvec_sub_query_set_fts).
 func (q *SubQuery) SetFTS(fts *FTS) error {
+	defer lockErrorThread()()
 	return toError(C.zvec_sub_query_set_fts(q.handle, fts.handle))
 }

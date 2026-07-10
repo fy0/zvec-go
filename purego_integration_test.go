@@ -1,4 +1,4 @@
-//go:build purego && integration
+//go:build (purego || !cgo) && integration
 
 package zvec
 

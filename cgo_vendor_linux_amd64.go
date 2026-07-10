@@ -1,4 +1,4 @@
-//go:build !source && linux && amd64 && !purego
+//go:build cgo && !source && linux && amd64 && !purego
 
 package zvec
 

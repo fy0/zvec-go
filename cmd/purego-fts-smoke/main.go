@@ -1,4 +1,4 @@
-//go:build purego
+//go:build purego || !cgo
 
 package main
 

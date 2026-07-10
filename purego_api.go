@@ -1,4 +1,4 @@
-//go:build purego
+//go:build purego || !cgo
 
 package zvec
 
@@ -108,6 +108,13 @@ func toError(code int32) error {
 	}
 
 	return &Error{Code: ErrorCode(code), Message: message}
+}
+
+// lockErrorThread keeps a native call and its subsequent thread-local error
+// lookup on the same OS thread.
+func lockErrorThread() func() {
+	runtime.LockOSThread()
+	return runtime.UnlockOSThread
 }
 
 func invalidArgumentError(message string) error {
@@ -328,6 +335,7 @@ func Initialize(config *ConfigData) error {
 	if config != nil {
 		cConfig = config.handle
 	}
+	defer lockErrorThread()()
 	return toError(api.initialize(cConfig))
 }
 
@@ -337,6 +345,7 @@ func Shutdown() error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.shutdown())
 }
 
@@ -426,6 +435,7 @@ func (c *ConfigData) SetMemoryLimit(bytes uint64) error {
 	if c == nil || c.handle == nil {
 		return invalidArgumentError("config data is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.configDataSetMemoryLimit(c.handle, bytes))
 }
 
@@ -445,6 +455,7 @@ func (c *ConfigData) SetQueryThreadCount(count uint32) error {
 	if c == nil || c.handle == nil {
 		return invalidArgumentError("config data is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.configDataSetQueryThreadCount(c.handle, count))
 }
 
@@ -464,6 +475,7 @@ func (c *ConfigData) SetOptimizeThreadCount(count uint32) error {
 	if c == nil || c.handle == nil {
 		return invalidArgumentError("config data is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.configDataSetOptimizeThreadCount(c.handle, count))
 }
 
@@ -483,6 +495,7 @@ func (c *ConfigData) SetFTSBruteForceByKeysRatio(ratio float32) error {
 	if c == nil || c.handle == nil {
 		return invalidArgumentError("config data is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.configDataSetFTSBruteForceRatio(c.handle, ratio))
 }
 
@@ -503,6 +516,7 @@ func (c *ConfigData) SetJiebaDictDir(dir string) error {
 		return invalidArgumentError("config data is nil")
 	}
 	dirBuf, cDir := optionalCString(dir)
+	defer lockErrorThread()()
 	err = toError(api.configDataSetJiebaDictDir(c.handle, cDir))
 	runtime.KeepAlive(dirBuf)
 	return err
@@ -528,6 +542,7 @@ func (c *ConfigData) SetConsoleLog(level LogLevel) error {
 	if logConfig == nil {
 		return &Error{Code: InternalError, Message: "failed to create console log config"}
 	}
+	defer lockErrorThread()()
 	err = toError(api.configDataSetLogConfig(c.handle, logConfig))
 	if err != nil {
 		api.configLogDestroy(logConfig)
@@ -557,6 +572,7 @@ func (c *ConfigData) SetFileLog(level LogLevel, dir, basename string, fileSizeMB
 	if logConfig == nil {
 		return &Error{Code: InternalError, Message: "failed to create file log config"}
 	}
+	defer lockErrorThread()()
 	err = toError(api.configDataSetLogConfig(c.handle, logConfig))
 	if err != nil {
 		api.configLogDestroy(logConfig)
@@ -698,6 +714,7 @@ func (p *IndexParams) SetMetricType(metric MetricType) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.indexParamsSetMetricType(p.handle, uint32(metric)))
 }
 
@@ -714,6 +731,7 @@ func (p *IndexParams) SetQuantizeType(quantize QuantizeType) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.indexParamsSetQuantizeType(p.handle, uint32(quantize)))
 }
 
@@ -730,6 +748,7 @@ func (p *IndexParams) SetHNSWParams(m, efConstruction int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.indexParamsSetHNSWParams(p.handle, int32(m), int32(efConstruction)))
 }
 
@@ -754,6 +773,7 @@ func (p *IndexParams) SetIVFParams(nList, nIters int, useSoar bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.indexParamsSetIVFParams(p.handle, int32(nList), int32(nIters), useSoar))
 }
 
@@ -762,6 +782,7 @@ func (p *IndexParams) SetInvertParams(enableRangeOpt, enableWildcard bool) error
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.indexParamsSetInvertParams(p.handle, enableRangeOpt, enableWildcard))
 }
 
@@ -787,6 +808,7 @@ func (p *IndexParams) SetFTSParams(tokenizerName string, filters []string, extra
 			api.stringArrayAdd(cFilters, uintptr(i), filter)
 		}
 	}
+	defer lockErrorThread()()
 
 	err = toError(api.indexParamsSetFTSParams(p.handle, cTokenizer, cFilters, cExtra))
 	runtime.KeepAlive(tokenizerBuf)
@@ -806,6 +828,7 @@ func (p *IndexParams) GetFTSParams() (tokenizerName string, filters []string, ex
 	}
 
 	var cTokenizer, cFilters, cExtra unsafe.Pointer
+	defer lockErrorThread()()
 	err = toError(api.indexParamsGetFTSParams(p.handle, &cTokenizer, &cFilters, &cExtra))
 	if err != nil {
 		return
@@ -821,8 +844,22 @@ func (p *IndexParams) GetFTSParams() (tokenizerName string, filters []string, ex
 
 // FieldSchema wraps zvec_field_schema_t.
 type FieldSchema struct {
-	handle unsafe.Pointer
-	owned  bool
+	handle          unsafe.Pointer
+	owned           bool
+	owner           *CollectionSchema
+	ownerGeneration uint64
+}
+
+func (f *FieldSchema) validHandle() unsafe.Pointer {
+	if f == nil || f.handle == nil {
+		return nil
+	}
+	if f.owner != nil && (f.owner.handle == nil || f.owner.generation != f.ownerGeneration) {
+		f.handle = nil
+		f.owner = nil
+		return nil
+	}
+	return f.handle
 }
 
 func NewFieldSchema(name string, dataType DataType, nullable bool, dimension uint32) *FieldSchema {
@@ -838,20 +875,26 @@ func NewFieldSchema(name string, dataType DataType, nullable bool, dimension uin
 }
 
 func (f *FieldSchema) Destroy() {
-	if f != nil && f.handle != nil && f.owned {
-		if api, err := puregoAPI(); err == nil {
-			api.fieldSchemaDestroy(f.handle)
-		}
-		f.handle = nil
+	if f == nil {
+		return
 	}
+	handle := f.validHandle()
+	if handle != nil && f.owned {
+		if api, err := puregoAPI(); err == nil {
+			api.fieldSchemaDestroy(handle)
+		}
+	}
+	f.handle = nil
+	f.owner = nil
 }
 
 func (f *FieldSchema) GetName() string {
 	api, err := puregoAPI()
-	if err != nil || f == nil || f.handle == nil {
+	handle := f.validHandle()
+	if err != nil || handle == nil {
 		return ""
 	}
-	return api.fieldSchemaGetName(f.handle)
+	return api.fieldSchemaGetName(handle)
 }
 
 func (f *FieldSchema) SetName(name string) error {
@@ -859,15 +902,21 @@ func (f *FieldSchema) SetName(name string) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.fieldSchemaSetName(f.handle, name))
+	handle := f.validHandle()
+	if handle == nil {
+		return invalidArgumentError("field schema is no longer valid")
+	}
+	defer lockErrorThread()()
+	return toError(api.fieldSchemaSetName(handle, name))
 }
 
 func (f *FieldSchema) GetDataType() DataType {
 	api, err := puregoAPI()
-	if err != nil || f == nil || f.handle == nil {
+	handle := f.validHandle()
+	if err != nil || handle == nil {
 		return DataTypeUndefined
 	}
-	return DataType(api.fieldSchemaGetDataType(f.handle))
+	return DataType(api.fieldSchemaGetDataType(handle))
 }
 
 func (f *FieldSchema) SetDataType(dataType DataType) error {
@@ -875,12 +924,18 @@ func (f *FieldSchema) SetDataType(dataType DataType) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.fieldSchemaSetDataType(f.handle, uint32(dataType)))
+	handle := f.validHandle()
+	if handle == nil {
+		return invalidArgumentError("field schema is no longer valid")
+	}
+	defer lockErrorThread()()
+	return toError(api.fieldSchemaSetDataType(handle, uint32(dataType)))
 }
 
 func (f *FieldSchema) IsNullable() bool {
 	api, err := puregoAPI()
-	return err == nil && f != nil && f.handle != nil && api.fieldSchemaIsNullable(f.handle)
+	handle := f.validHandle()
+	return err == nil && handle != nil && api.fieldSchemaIsNullable(handle)
 }
 
 func (f *FieldSchema) SetNullable(nullable bool) error {
@@ -888,15 +943,21 @@ func (f *FieldSchema) SetNullable(nullable bool) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.fieldSchemaSetNullable(f.handle, nullable))
+	handle := f.validHandle()
+	if handle == nil {
+		return invalidArgumentError("field schema is no longer valid")
+	}
+	defer lockErrorThread()()
+	return toError(api.fieldSchemaSetNullable(handle, nullable))
 }
 
 func (f *FieldSchema) GetDimension() uint32 {
 	api, err := puregoAPI()
-	if err != nil || f == nil || f.handle == nil {
+	handle := f.validHandle()
+	if err != nil || handle == nil {
 		return 0
 	}
-	return api.fieldSchemaGetDimension(f.handle)
+	return api.fieldSchemaGetDimension(handle)
 }
 
 func (f *FieldSchema) SetDimension(dimension uint32) error {
@@ -904,35 +965,45 @@ func (f *FieldSchema) SetDimension(dimension uint32) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.fieldSchemaSetDimension(f.handle, dimension))
+	handle := f.validHandle()
+	if handle == nil {
+		return invalidArgumentError("field schema is no longer valid")
+	}
+	defer lockErrorThread()()
+	return toError(api.fieldSchemaSetDimension(handle, dimension))
 }
 
 func (f *FieldSchema) IsVectorField() bool {
 	api, err := puregoAPI()
-	return err == nil && f != nil && f.handle != nil && api.fieldSchemaIsVectorField(f.handle)
+	handle := f.validHandle()
+	return err == nil && handle != nil && api.fieldSchemaIsVectorField(handle)
 }
 
 func (f *FieldSchema) IsDenseVector() bool {
 	api, err := puregoAPI()
-	return err == nil && f != nil && f.handle != nil && api.fieldSchemaIsDenseVector(f.handle)
+	handle := f.validHandle()
+	return err == nil && handle != nil && api.fieldSchemaIsDenseVector(handle)
 }
 
 func (f *FieldSchema) IsSparseVector() bool {
 	api, err := puregoAPI()
-	return err == nil && f != nil && f.handle != nil && api.fieldSchemaIsSparseVector(f.handle)
+	handle := f.validHandle()
+	return err == nil && handle != nil && api.fieldSchemaIsSparseVector(handle)
 }
 
 func (f *FieldSchema) HasIndex() bool {
 	api, err := puregoAPI()
-	return err == nil && f != nil && f.handle != nil && api.fieldSchemaHasIndex(f.handle)
+	handle := f.validHandle()
+	return err == nil && handle != nil && api.fieldSchemaHasIndex(handle)
 }
 
 func (f *FieldSchema) GetIndexType() IndexType {
 	api, err := puregoAPI()
-	if err != nil || f == nil || f.handle == nil {
+	handle := f.validHandle()
+	if err != nil || handle == nil {
 		return IndexTypeUndefined
 	}
-	return IndexType(api.fieldSchemaGetIndexType(f.handle))
+	return IndexType(api.fieldSchemaGetIndexType(handle))
 }
 
 func (f *FieldSchema) SetIndexParams(params *IndexParams) error {
@@ -943,12 +1014,18 @@ func (f *FieldSchema) SetIndexParams(params *IndexParams) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.fieldSchemaSetIndexParams(f.handle, params.handle))
+	handle := f.validHandle()
+	if handle == nil {
+		return invalidArgumentError("field schema is no longer valid")
+	}
+	defer lockErrorThread()()
+	return toError(api.fieldSchemaSetIndexParams(handle, params.handle))
 }
 
 // CollectionSchema wraps zvec_collection_schema_t.
 type CollectionSchema struct {
-	handle unsafe.Pointer
+	handle     unsafe.Pointer
+	generation uint64
 }
 
 func NewCollectionSchema(name string) *CollectionSchema {
@@ -969,6 +1046,7 @@ func (s *CollectionSchema) Destroy() {
 			api.collectionSchemaDestroy(s.handle)
 		}
 		s.handle = nil
+		s.generation++
 	}
 }
 
@@ -985,18 +1063,25 @@ func (s *CollectionSchema) SetName(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionSchemaSetName(s.handle, name))
 }
 
 func (s *CollectionSchema) AddField(field *FieldSchema) error {
-	if field == nil || field.handle == nil {
+	fieldHandle := field.validHandle()
+	if fieldHandle == nil {
 		return invalidArgumentError("field schema is nil")
 	}
 	api, err := puregoAPI()
 	if err != nil {
 		return err
 	}
-	return toError(api.collectionSchemaAddField(s.handle, field.handle))
+	defer lockErrorThread()()
+	err = toError(api.collectionSchemaAddField(s.handle, fieldHandle))
+	if err == nil {
+		s.generation++
+	}
+	return err
 }
 
 func (s *CollectionSchema) HasField(name string) bool {
@@ -1013,7 +1098,7 @@ func (s *CollectionSchema) GetField(name string) *FieldSchema {
 	if handle == nil {
 		return nil
 	}
-	return &FieldSchema{handle: handle, owned: false}
+	return &FieldSchema{handle: handle, owned: false, owner: s, ownerGeneration: s.generation}
 }
 
 func (s *CollectionSchema) DropField(name string) error {
@@ -1021,7 +1106,12 @@ func (s *CollectionSchema) DropField(name string) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.collectionSchemaDropField(s.handle, name))
+	defer lockErrorThread()()
+	err = toError(api.collectionSchemaDropField(s.handle, name))
+	if err == nil {
+		s.generation++
+	}
+	return err
 }
 
 func (s *CollectionSchema) AddIndex(fieldName string, params *IndexParams) error {
@@ -1032,7 +1122,12 @@ func (s *CollectionSchema) AddIndex(fieldName string, params *IndexParams) error
 	if err != nil {
 		return err
 	}
-	return toError(api.collectionSchemaAddIndex(s.handle, fieldName, params.handle))
+	defer lockErrorThread()()
+	err = toError(api.collectionSchemaAddIndex(s.handle, fieldName, params.handle))
+	if err == nil {
+		s.generation++
+	}
+	return err
 }
 
 func (s *CollectionSchema) DropIndex(fieldName string) error {
@@ -1040,7 +1135,12 @@ func (s *CollectionSchema) DropIndex(fieldName string) error {
 	if err != nil {
 		return err
 	}
-	return toError(api.collectionSchemaDropIndex(s.handle, fieldName))
+	defer lockErrorThread()()
+	err = toError(api.collectionSchemaDropIndex(s.handle, fieldName))
+	if err == nil {
+		s.generation++
+	}
+	return err
 }
 
 func (s *CollectionSchema) HasIndex(fieldName string) bool {
@@ -1053,6 +1153,7 @@ func (s *CollectionSchema) SetMaxDocCountPerSegment(count uint64) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionSchemaSetMaxDocCountPerSeg(s.handle, count))
 }
 
@@ -1068,6 +1169,8 @@ func (s *CollectionSchema) GetMaxDocCountPerSegment() uint64 {
 type CollectionOptions struct {
 	handle unsafe.Pointer
 }
+
+const maxCollectionBufferSize uint64 = 1<<32 - 1
 
 func NewCollectionOptions() *CollectionOptions {
 	api, err := puregoAPI()
@@ -1095,6 +1198,7 @@ func (o *CollectionOptions) SetEnableMmap(enable bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionOptionsSetEnableMmap(o.handle, enable))
 }
 
@@ -1104,10 +1208,14 @@ func (o *CollectionOptions) GetEnableMmap() bool {
 }
 
 func (o *CollectionOptions) SetMaxBufferSize(size uint64) error {
+	if size > maxCollectionBufferSize {
+		return invalidArgumentError("max buffer size exceeds the supported uint32 range")
+	}
 	api, err := puregoAPI()
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionOptionsSetMaxBufferSize(o.handle, uintptr(size)))
 }
 
@@ -1124,6 +1232,7 @@ func (o *CollectionOptions) SetReadOnly(readOnly bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionOptionsSetReadOnly(o.handle, readOnly))
 }
 
@@ -1164,6 +1273,7 @@ func CreateAndOpen(path string, schema *CollectionSchema, options *CollectionOpt
 		cOptions = options.handle
 	}
 	var cCollection unsafe.Pointer
+	defer lockErrorThread()()
 	if err := toError(api.collectionCreateAndOpen(path, schema.handle, cOptions, &cCollection)); err != nil {
 		return nil, err
 	}
@@ -1180,6 +1290,7 @@ func Open(path string, options *CollectionOptions) (*Collection, error) {
 		cOptions = options.handle
 	}
 	var cCollection unsafe.Pointer
+	defer lockErrorThread()()
 	if err := toError(api.collectionOpen(path, cOptions, &cCollection)); err != nil {
 		return nil, err
 	}
@@ -1194,6 +1305,7 @@ func (c *Collection) Close() error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.collectionClose(c.handle))
 	c.handle = nil
 	return err
@@ -1207,6 +1319,7 @@ func (c *Collection) Destroy() error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	destroyErr := toError(api.collectionDestroy(c.handle))
 	_ = api.collectionClose(c.handle)
 	c.handle = nil
@@ -1218,6 +1331,7 @@ func (c *Collection) Flush() error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionFlush(c.handle))
 }
 
@@ -1227,6 +1341,7 @@ func (c *Collection) GetSchema() (*CollectionSchema, error) {
 		return nil, err
 	}
 	var cSchema unsafe.Pointer
+	defer lockErrorThread()()
 	if err := toError(api.collectionGetSchema(c.handle, &cSchema)); err != nil {
 		return nil, err
 	}
@@ -1239,6 +1354,7 @@ func (c *Collection) GetOptions() (*CollectionOptions, error) {
 		return nil, err
 	}
 	var cOptions unsafe.Pointer
+	defer lockErrorThread()()
 	if err := toError(api.collectionGetOptions(c.handle, &cOptions)); err != nil {
 		return nil, err
 	}
@@ -1251,6 +1367,7 @@ func (c *Collection) GetStats() (*CollectionStats, error) {
 		return nil, err
 	}
 	var cStats unsafe.Pointer
+	defer lockErrorThread()()
 	if err := toError(api.collectionGetStats(c.handle, &cStats)); err != nil {
 		return nil, err
 	}
@@ -1276,6 +1393,7 @@ func (c *Collection) Optimize() error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionOptimize(c.handle))
 }
 
@@ -1287,6 +1405,7 @@ func (c *Collection) CreateIndex(fieldName string, params *IndexParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionCreateIndex(c.handle, fieldName, params.handle))
 }
 
@@ -1295,19 +1414,22 @@ func (c *Collection) DropIndex(fieldName string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionDropIndex(c.handle, fieldName))
 }
 
 func (c *Collection) AddColumn(fieldSchema *FieldSchema, defaultExpr string) error {
-	if fieldSchema == nil || fieldSchema.handle == nil {
-		return invalidArgumentError("field schema is nil")
+	fieldHandle := fieldSchema.validHandle()
+	if fieldHandle == nil {
+		return invalidArgumentError("field schema is no longer valid")
 	}
 	api, err := puregoAPI()
 	if err != nil {
 		return err
 	}
 	exprBuf, cExpr := optionalCString(defaultExpr)
-	err = toError(api.collectionAddColumn(c.handle, fieldSchema.handle, cExpr))
+	defer lockErrorThread()()
+	err = toError(api.collectionAddColumn(c.handle, fieldHandle, cExpr))
 	runtime.KeepAlive(exprBuf)
 	return err
 }
@@ -1317,6 +1439,7 @@ func (c *Collection) DropColumn(columnName string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionDropColumn(c.handle, columnName))
 }
 
@@ -1328,8 +1451,12 @@ func (c *Collection) AlterColumn(columnName, newName string, newSchema *FieldSch
 	nameBuf, cNewName := optionalCString(newName)
 	var cNewSchema unsafe.Pointer
 	if newSchema != nil {
-		cNewSchema = newSchema.handle
+		cNewSchema = newSchema.validHandle()
+		if cNewSchema == nil {
+			return invalidArgumentError("new field schema is no longer valid")
+		}
 	}
+	defer lockErrorThread()()
 	err = toError(api.collectionAlterColumn(c.handle, columnName, cNewName, cNewSchema))
 	runtime.KeepAlive(nameBuf)
 	return err
@@ -1362,6 +1489,7 @@ func (c *Collection) writeDocs(docs []*Doc, fn func(unsafe.Pointer, unsafe.Point
 		handles[i] = doc.handle
 	}
 	var successCount, errorCount uintptr
+	defer lockErrorThread()()
 	if err := toError(fn(c.handle, unsafe.Pointer(&handles[0]), uintptr(len(handles)), &successCount, &errorCount)); err != nil {
 		return nil, err
 	}
@@ -1379,6 +1507,7 @@ func (c *Collection) Delete(pks []string) (*WriteResult, error) {
 	}
 	ptrs, keep := cStringArray(pks)
 	var successCount, errorCount uintptr
+	defer lockErrorThread()()
 	err = toError(api.collectionDelete(c.handle, unsafe.Pointer(&ptrs[0]), uintptr(len(ptrs)), &successCount, &errorCount))
 	runtime.KeepAlive(ptrs)
 	runtime.KeepAlive(keep)
@@ -1393,6 +1522,7 @@ func (c *Collection) DeleteByFilter(filter string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.collectionDeleteByFilter(c.handle, filter))
 }
 
@@ -1406,6 +1536,7 @@ func (c *Collection) Query(query *SearchQuery) ([]*Doc, error) {
 	}
 	var cResults unsafe.Pointer
 	var resultCount uintptr
+	defer lockErrorThread()()
 	if err := toError(api.collectionQuery(c.handle, query.handle, &cResults, &resultCount)); err != nil {
 		return nil, err
 	}
@@ -1422,6 +1553,7 @@ func (c *Collection) MultiQuery(query *MultiQuery) ([]*Doc, error) {
 	}
 	var cResults unsafe.Pointer
 	var resultCount uintptr
+	defer lockErrorThread()()
 	if err := toError(api.collectionMultiQuery(c.handle, query.handle, &cResults, &resultCount)); err != nil {
 		return nil, err
 	}
@@ -1455,6 +1587,7 @@ func (c *Collection) Fetch(primaryKeys []string, opts *FetchOptions) ([]*Doc, er
 	}
 	var cDocs unsafe.Pointer
 	var foundCount uintptr
+	defer lockErrorThread()()
 	err = toError(api.collectionFetch(
 		c.handle,
 		unsafe.Pointer(&pkPtrs[0]),
@@ -1627,6 +1760,7 @@ func (d *Doc) addField(name string, dataType DataType, value unsafe.Pointer, siz
 	if d == nil || d.handle == nil {
 		return invalidArgumentError("document is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.docAddFieldByValue(d.handle, name, uint32(dataType), value, size))
 }
 
@@ -1635,6 +1769,7 @@ func (d *Doc) SetFieldNull(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.docSetFieldNull(d.handle, name))
 }
 
@@ -1643,6 +1778,7 @@ func (d *Doc) RemoveField(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.docRemoveField(d.handle, name))
 }
 
@@ -1766,6 +1902,7 @@ func (d *Doc) getFieldBasic(name string, fieldType DataType, value unsafe.Pointe
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.docGetFieldValueBasic(d.handle, name, uint32(fieldType), value, size))
 }
 
@@ -1776,6 +1913,7 @@ func (d *Doc) getFieldPointer(name string, fieldType DataType) (unsafe.Pointer, 
 	}
 	var value unsafe.Pointer
 	var size uintptr
+	defer lockErrorThread()()
 	if err := toError(api.docGetFieldValuePointer(d.handle, name, uint32(fieldType), &value, &size)); err != nil {
 		return nil, 0, err
 	}
@@ -1804,6 +1942,7 @@ func (d *Doc) GetFieldNames() ([]string, error) {
 	}
 	var cNames unsafe.Pointer
 	var count uintptr
+	defer lockErrorThread()()
 	if err := toError(api.docGetFieldNames(d.handle, &cNames, &count)); err != nil {
 		return nil, err
 	}
@@ -1847,6 +1986,7 @@ func (p *HNSWQueryParams) SetEf(ef int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.hnswQueryParamsSetEf(p.handle, int32(ef)))
 }
 
@@ -1889,6 +2029,7 @@ func (p *IVFQueryParams) SetNprobe(nprobe int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.ivfQueryParamsSetNprobe(p.handle, int32(nprobe)))
 }
 
@@ -1953,6 +2094,7 @@ func (p *FTSQueryParams) SetDefaultOperator(op string) error {
 	if p == nil || p.handle == nil {
 		return invalidArgumentError("FTS query params is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.ftsQueryParamsSetOp(p.handle, op))
 }
 
@@ -1996,6 +2138,7 @@ func (q *SearchQuery) SetFieldName(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetFieldName(q.handle, name))
 }
 
@@ -2012,6 +2155,7 @@ func (q *SearchQuery) SetTopK(topk int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetTopK(q.handle, int32(topk)))
 }
 
@@ -2031,6 +2175,7 @@ func (q *SearchQuery) SetQueryVector(data []float32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetQueryVector(q.handle, unsafe.Pointer(&data[0]), uintptr(len(data)*4)))
 	runtime.KeepAlive(data)
 	return err
@@ -2041,6 +2186,7 @@ func (q *SearchQuery) SetFilter(filter string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetFilter(q.handle, filter))
 }
 
@@ -2057,6 +2203,7 @@ func (q *SearchQuery) SetIncludeVector(include bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetIncludeVector(q.handle, include))
 }
 
@@ -2070,6 +2217,7 @@ func (q *SearchQuery) SetIncludeDocID(include bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetIncludeDocID(q.handle, include))
 }
 
@@ -2087,6 +2235,7 @@ func (q *SearchQuery) SetOutputFields(fields []string) error {
 		return err
 	}
 	ptrs, keep := cStringArray(fields)
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetOutputFields(q.handle, unsafe.Pointer(&ptrs[0]), uintptr(len(ptrs))))
 	runtime.KeepAlive(ptrs)
 	runtime.KeepAlive(keep)
@@ -2101,6 +2250,7 @@ func (q *SearchQuery) SetHNSWParams(params *HNSWQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetHNSWParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2116,6 +2266,7 @@ func (q *SearchQuery) SetIVFParams(params *IVFQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetIVFParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2131,6 +2282,7 @@ func (q *SearchQuery) SetFlatParams(params *FlatQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetFlatParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2146,6 +2298,7 @@ func (q *SearchQuery) SetFTSParams(params *FTSQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.vectorQuerySetFTSParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2161,6 +2314,7 @@ func (q *SearchQuery) SetFTS(fts *FTS) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.vectorQuerySetFTS(q.handle, fts.handle))
 }
 
@@ -2169,11 +2323,23 @@ func (q *SearchQuery) GetFTS() *FTS {
 	if err != nil || q == nil || q.handle == nil {
 		return nil
 	}
-	handle := api.vectorQueryGetFTS(q.handle)
-	if handle == nil {
+	source := api.vectorQueryGetFTS(q.handle)
+	if source == nil {
 		return nil
 	}
-	return &FTS{handle: handle, owned: false}
+	clone := NewFTS()
+	if clone == nil {
+		return nil
+	}
+	if err := clone.SetQueryString(api.ftsGetQueryString(source)); err != nil {
+		clone.Destroy()
+		return nil
+	}
+	if err := clone.SetMatchString(api.ftsGetMatchString(source)); err != nil {
+		clone.Destroy()
+		return nil
+	}
+	return clone
 }
 
 type GroupBySearchQuery struct {
@@ -2206,6 +2372,7 @@ func (q *GroupBySearchQuery) SetFieldName(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetFieldName(q.handle, name))
 }
 
@@ -2214,6 +2381,7 @@ func (q *GroupBySearchQuery) SetGroupByFieldName(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetGroupByFieldName(q.handle, name))
 }
 
@@ -2222,6 +2390,7 @@ func (q *GroupBySearchQuery) SetGroupCount(count uint32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetGroupCount(q.handle, count))
 }
 
@@ -2230,6 +2399,7 @@ func (q *GroupBySearchQuery) SetGroupTopK(topk uint32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetGroupTopK(q.handle, topk))
 }
 
@@ -2241,6 +2411,7 @@ func (q *GroupBySearchQuery) SetQueryVector(data []float32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.groupByQuerySetQueryVector(q.handle, unsafe.Pointer(&data[0]), uintptr(len(data)*4)))
 	runtime.KeepAlive(data)
 	return err
@@ -2251,6 +2422,7 @@ func (q *GroupBySearchQuery) SetFilter(filter string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetFilter(q.handle, filter))
 }
 
@@ -2259,6 +2431,7 @@ func (q *GroupBySearchQuery) SetIncludeVector(include bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.groupByQuerySetIncludeVector(q.handle, include))
 }
 
@@ -2271,6 +2444,7 @@ func (q *GroupBySearchQuery) SetOutputFields(fields []string) error {
 		return err
 	}
 	ptrs, keep := cStringArray(fields)
+	defer lockErrorThread()()
 	err = toError(api.groupByQuerySetOutputFields(q.handle, unsafe.Pointer(&ptrs[0]), uintptr(len(ptrs))))
 	runtime.KeepAlive(ptrs)
 	runtime.KeepAlive(keep)
@@ -2285,6 +2459,7 @@ func (q *GroupBySearchQuery) SetHNSWParams(params *HNSWQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.groupByQuerySetHNSWParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2300,6 +2475,7 @@ func (q *GroupBySearchQuery) SetIVFParams(params *IVFQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.groupByQuerySetIVFParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2315,6 +2491,7 @@ func (q *GroupBySearchQuery) SetFlatParams(params *FlatQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.groupByQuerySetFlatParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2355,6 +2532,7 @@ func (q *MultiQuery) AddSubQuery(sub *SubQuery) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.multiQueryAddSubQuery(q.handle, sub.handle))
 }
 
@@ -2371,6 +2549,7 @@ func (q *MultiQuery) SetTopK(topk int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.multiQuerySetTopK(q.handle, int32(topk)))
 }
 
@@ -2387,6 +2566,7 @@ func (q *MultiQuery) SetFilter(filter string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.multiQuerySetFilter(q.handle, filter))
 }
 
@@ -2403,6 +2583,7 @@ func (q *MultiQuery) SetIncludeVector(include bool) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.multiQuerySetIncludeVector(q.handle, include))
 }
 
@@ -2420,6 +2601,7 @@ func (q *MultiQuery) SetOutputFields(fields []string) error {
 		return err
 	}
 	ptrs, keep := cStringArray(fields)
+	defer lockErrorThread()()
 	err = toError(api.multiQuerySetOutputFields(q.handle, unsafe.Pointer(&ptrs[0]), uintptr(len(ptrs))))
 	runtime.KeepAlive(ptrs)
 	runtime.KeepAlive(keep)
@@ -2431,6 +2613,7 @@ func (q *MultiQuery) SetRerankRRF(rankConstant int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.multiQuerySetRerankRRF(q.handle, int32(rankConstant)))
 }
 
@@ -2442,6 +2625,7 @@ func (q *MultiQuery) SetRerankWeighted(weights []float64) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.multiQuerySetRerankWeighted(q.handle, unsafe.Pointer(&weights[0]), uintptr(len(weights))))
 	runtime.KeepAlive(weights)
 	return err
@@ -2477,6 +2661,7 @@ func (q *SubQuery) SetNumCandidates(n int) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.subQuerySetNumCandidates(q.handle, int32(n)))
 }
 
@@ -2493,6 +2678,7 @@ func (q *SubQuery) SetFieldName(name string) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.subQuerySetFieldName(q.handle, name))
 }
 
@@ -2512,6 +2698,7 @@ func (q *SubQuery) SetQueryVector(data []float32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetQueryVector(q.handle, unsafe.Pointer(&data[0]), uintptr(len(data)*4)))
 	runtime.KeepAlive(data)
 	return err
@@ -2528,6 +2715,7 @@ func (q *SubQuery) SetSparseVector(indices []uint32, values []float32) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetSparseVector(
 		q.handle,
 		unsafe.Pointer(&indices[0]),
@@ -2547,6 +2735,7 @@ func (q *SubQuery) SetHNSWParams(params *HNSWQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetHNSWParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2562,6 +2751,7 @@ func (q *SubQuery) SetIVFParams(params *IVFQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetIVFParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2577,6 +2767,7 @@ func (q *SubQuery) SetFlatParams(params *FlatQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetFlatParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2592,6 +2783,7 @@ func (q *SubQuery) SetFTSParams(params *FTSQueryParams) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	err = toError(api.subQuerySetFTSParams(q.handle, params.handle))
 	if err == nil {
 		params.handle = nil
@@ -2607,6 +2799,7 @@ func (q *SubQuery) SetFTS(fts *FTS) error {
 	if err != nil {
 		return err
 	}
+	defer lockErrorThread()()
 	return toError(api.subQuerySetFTS(q.handle, fts.handle))
 }
 
@@ -2644,6 +2837,7 @@ func (f *FTS) SetQueryString(query string) error {
 	if f == nil || f.handle == nil {
 		return invalidArgumentError("FTS payload is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.ftsSetQueryString(f.handle, query))
 }
 
@@ -2663,6 +2857,7 @@ func (f *FTS) SetMatchString(match string) error {
 	if f == nil || f.handle == nil {
 		return invalidArgumentError("FTS payload is nil")
 	}
+	defer lockErrorThread()()
 	return toError(api.ftsSetMatchString(f.handle, match))
 }
 

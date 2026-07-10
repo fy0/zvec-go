@@ -1,4 +1,4 @@
-//go:build purego && (linux || darwin)
+//go:build (purego || !cgo) && (linux || darwin)
 
 package zvec
 

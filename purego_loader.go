@@ -1,4 +1,4 @@
-//go:build purego
+//go:build purego || !cgo
 
 package zvec
 
@@ -14,13 +14,18 @@ import (
 	"github.com/ebitengine/purego"
 )
 
-const zvecLibraryPathEnv = "ZVEC_LIBRARY_PATH"
+const (
+	zvecLibraryPathEnv = "ZVEC_LIBRARY_PATH"
+	puregoABIMajor     = 0
+	puregoABIMinor     = 5
+	puregoMinABIPatch  = 1
+)
 
 var (
-	puregoLoadOnce sync.Once
-	puregoLoadErr  error
-	puregoHandle   uintptr
-	puregoFns      zvecPuregoAPI
+	puregoLoadMu        sync.Mutex
+	puregoHandle        uintptr
+	puregoFns           zvecPuregoAPI
+	puregoBackendLoader = loadPuregoBackend
 )
 
 type zvecPuregoAPI struct {
@@ -252,11 +257,13 @@ type zvecPuregoAPI struct {
 }
 
 func puregoAPI() (*zvecPuregoAPI, error) {
-	puregoLoadOnce.Do(func() {
-		puregoLoadErr = loadPuregoBackend()
-	})
-	if puregoLoadErr != nil {
-		return nil, puregoLoadErr
+	puregoLoadMu.Lock()
+	defer puregoLoadMu.Unlock()
+	if puregoHandle != 0 {
+		return &puregoFns, nil
+	}
+	if err := puregoBackendLoader(); err != nil {
+		return nil, err
 	}
 	return &puregoFns, nil
 }
@@ -274,14 +281,36 @@ func loadPuregoBackend() error {
 			attempts = append(attempts, fmt.Sprintf("%s: %v", candidate, err))
 			continue
 		}
+		if err := validatePuregoVersion(&puregoFns); err != nil {
+			_ = closeZvecLibrary(handle)
+			attempts = append(attempts, fmt.Sprintf("%s: %v", candidate, err))
+			continue
+		}
 		puregoHandle = handle
 		return nil
 	}
+	puregoFns = zvecPuregoAPI{}
 	if len(attempts) == 0 {
 		return fmt.Errorf("zvec purego backend: no library candidates for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	return fmt.Errorf("zvec purego backend: failed to load C API library; set %s to the library path; attempts: %s",
 		zvecLibraryPathEnv, strings.Join(attempts, "; "))
+}
+
+func validatePuregoVersion(api *zvecPuregoAPI) error {
+	major := int(api.getVersionMajor())
+	minor := int(api.getVersionMinor())
+	patch := int(api.getVersionPatch())
+	if major != puregoABIMajor || minor != puregoABIMinor || patch < puregoMinABIPatch {
+		return fmt.Errorf(
+			"incompatible zvec C API version %d.%d.%d; require %d.%d.%d or newer patch release",
+			major, minor, patch, puregoABIMajor, puregoABIMinor, puregoMinABIPatch,
+		)
+	}
+	if !api.checkVersion(int32(puregoABIMajor), int32(puregoABIMinor), int32(puregoMinABIPatch)) {
+		return fmt.Errorf("zvec C API rejected minimum version %d.%d.%d", puregoABIMajor, puregoABIMinor, puregoMinABIPatch)
+	}
+	return nil
 }
 
 func registerPuregoSymbols(handle uintptr) (err error) {

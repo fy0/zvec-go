@@ -1,4 +1,4 @@
-//go:build !purego
+//go:build cgo && !purego
 
 package zvec
 
@@ -10,6 +10,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -102,4 +103,15 @@ func toError(code C.zvec_error_code_t) error {
 		Code:    ErrorCode(code),
 		Message: message,
 	}
+}
+
+// lockErrorThread keeps a native call and its subsequent thread-local error
+// lookup on the same OS thread.
+func lockErrorThread() func() {
+	runtime.LockOSThread()
+	return runtime.UnlockOSThread
+}
+
+func invalidArgumentError(message string) error {
+	return &Error{Code: InvalidArgument, Message: message}
 }
